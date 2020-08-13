@@ -19,16 +19,35 @@ var param2 = new(ssm.Parameter).
 	SetValue("rds.something.aws.com").
 	SetARN("arn:aws:ssm:us-east-2:aws-account-id:/my-service/dev/DB_HOST")
 
+// second page param
+var param3 = new(ssm.Parameter).
+	SetName("/my-service/dev/DB_DB").
+	SetValue("dev").
+	SetARN("arn:aws:ssm:us-east-2:aws-account-id:/my-service/dev/DB_DB")
+
 var errSSM = errors.New("ssm request error")
 
+var putParameterInputReceived ssm.PutParameterInput
+
 type stubSSMClient struct {
-	GetParametersByPathOutput *ssm.GetParametersByPathOutput
-	GetParametersByPathError  error
-	GetParameterOutput        *ssm.GetParameterOutput
-	GetParameterError         error
+	pageTwoNextToken                  string
+	GetParametersByPathOutput         *ssm.GetParametersByPathOutput
+	GetParametersByPathOutput_PageTwo *ssm.GetParametersByPathOutput
+	GetParametersByPathError          error
+	GetParametersByPathError_PageTwo  error
+	GetParameterOutput                *ssm.GetParameterOutput
+	GetParameterError                 error
 }
 
 func (s stubSSMClient) GetParametersByPath(input *ssm.GetParametersByPathInput) (*ssm.GetParametersByPathOutput, error) {
+	// return _PageTwo if the NextToken matches
+	//
+	// NOTE: This completely ignores the size of a page requested by the client,
+	// which is not how the real AWS client will work
+	if input.NextToken != nil && *input.NextToken == s.pageTwoNextToken {
+		return s.GetParametersByPathOutput_PageTwo, s.GetParametersByPathError_PageTwo
+	}
+
 	return s.GetParametersByPathOutput, s.GetParametersByPathError
 }
 
@@ -36,13 +55,15 @@ func (s stubSSMClient) GetParameter(input *ssm.GetParameterInput) (*ssm.GetParam
 	return s.GetParameterOutput, s.GetParameterError
 }
 
-// we don't really use this because there isn't much to actually test for PutParameter
-// it accepts an input and either returns an error or nil--that's it
+// we return nothing becuase the actual response is pretty boring. Just a version number. We DO
+// want to track was is input because there is a _little_ business logic around that
 func (s stubSSMClient) PutParameter(input *ssm.PutParameterInput) (*ssm.PutParameterOutput, error) {
-  return nil, nil
+	putParameterInputReceived = *input
+	return nil, nil
 }
 
 func TestClient_GetParametersByPath(t *testing.T) {
+	nextToken := "next-token"
 	tests := []struct {
 		name           string
 		ssmClient      ssmClient
@@ -75,6 +96,31 @@ func TestClient_GetParametersByPath(t *testing.T) {
 			path:          "/my-service/dev/",
 			expectedError: errSSM,
 		},
+
+		{
+			name: "Success For Multiple Pages",
+			ssmClient: &stubSSMClient{
+				pageTwoNextToken: nextToken,
+				GetParametersByPathOutput: &ssm.GetParametersByPathOutput{
+					NextToken:  &nextToken, // must match pageTwoNextToken two lines above
+					Parameters: getParameters(),
+				},
+				GetParametersByPathOutput_PageTwo: &ssm.GetParametersByPathOutput{
+					Parameters: []*ssm.Parameter{
+						param3,
+					},
+				},
+			},
+			path: "/my-service/dev/",
+			expectedOutput: &Parameters{
+				basePath: "/my-service/dev/",
+				parameters: map[string]*Parameter{
+					"/my-service/dev/DB_PASSWORD": {Value: param1.Value},
+					"/my-service/dev/DB_HOST":     {Value: param2.Value},
+					"/my-service/dev/DB_DB":       {Value: param3.Value},
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -85,7 +131,7 @@ func TestClient_GetParametersByPath(t *testing.T) {
 				t.Errorf(`Unexpected error: got %d, expected %d`, err, test.expectedError)
 			}
 			if !reflect.DeepEqual(parameters, test.expectedOutput) {
-				t.Error(`Unexpected parameters`, *parameters, *test.expectedOutput)
+				t.Errorf(`Unexpected parameters: got: %+v, expected: %+v`, *parameters, *test.expectedOutput)
 			}
 		})
 	}
@@ -147,3 +193,136 @@ func TestParameterStore_GetParameter(t *testing.T) {
 		})
 	}
 }
+
+func TestParameterStore_PutSecureParameter(t *testing.T) {
+	paramName := "foo"
+	paramValue := "baz"
+	paramType := "SecureString"
+	overwriteTrue := true
+	overwriteFalse := false
+	tests := []struct {
+		name           string
+		ssmClient      ssmClient
+		parameterName  string
+		parameterValue string
+		overwrite      bool
+		expectedError  error
+		expectedOutput ssm.PutParameterInput
+	}{
+		{
+			name:           "Failed Empty name",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  "",
+			parameterValue: "",
+			expectedError:  ErrParameterInvalidName,
+		},
+		{
+			name:           "Set Correct Defaults",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  paramName,
+			parameterValue: paramValue,
+			expectedOutput: ssm.PutParameterInput{
+				Name:      &paramName,
+				Type:      &paramType,
+				Value:     &paramValue,
+				Overwrite: &overwriteFalse,
+			},
+		},
+		{
+			name:           "Overwrite Changes Propagate",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  paramName,
+			parameterValue: paramValue,
+			overwrite:      overwriteTrue,
+			expectedOutput: ssm.PutParameterInput{
+				Name:      &paramName,
+				Type:      &paramType,
+				Value:     &paramValue,
+				Overwrite: &overwriteTrue,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// make sure we reset the mock input tracker
+			putParameterInputReceived = ssm.PutParameterInput{}
+
+			client := NewParameterStoreWithClient(test.ssmClient)
+			err := client.PutSecureParameter(test.parameterName, test.parameterValue, test.overwrite)
+			if err != test.expectedError {
+				t.Errorf(`Unexpected error: got %d, expected %d`, err, test.expectedError)
+			}
+			if !reflect.DeepEqual(putParameterInputReceived, test.expectedOutput) {
+				t.Error(`Unexpected parameter`, putParameterInputReceived, test.expectedOutput)
+			}
+		})
+	}
+}
+
+func TestParameterStore_PutSecureParameterWithCMK(t *testing.T) {
+	paramName := "foo"
+	paramValue := "baz"
+	paramType := "SecureString"
+	overwriteFalse := false
+	kmsID := "super-secret-kms"
+	tests := []struct {
+		name           string
+		ssmClient      ssmClient
+		parameterName  string
+		parameterValue string
+		overwrite      bool
+		kmsID          string
+		expectedError  error
+		expectedOutput ssm.PutParameterInput
+	}{
+		{
+			name:           "Failed Empty name",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  "",
+			parameterValue: "",
+			expectedError:  ErrParameterInvalidName,
+		},
+		{
+			name:           "Set Correct Defaults",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  paramName,
+			parameterValue: paramValue,
+			expectedOutput: ssm.PutParameterInput{
+				Name:      &paramName,
+				Overwrite: &overwriteFalse,
+				Type:      &paramType,
+				Value:     &paramValue,
+			},
+		},
+		{
+			name:           "KMS ID Changes Propagate",
+			ssmClient:      &stubSSMClient{},
+			parameterName:  paramName,
+			parameterValue: paramValue,
+			kmsID:          kmsID,
+			expectedOutput: ssm.PutParameterInput{
+				KeyId:     &kmsID,
+				Name:      &paramName,
+				Overwrite: &overwriteFalse,
+				Type:      &paramType,
+				Value:     &paramValue,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// make sure we reset the mock input tracker
+			putParameterInputReceived = ssm.PutParameterInput{}
+
+			client := NewParameterStoreWithClient(test.ssmClient)
+			err := client.PutSecureParameterWithCMK(test.parameterName, test.parameterValue, test.overwrite, test.kmsID)
+			if err != test.expectedError {
+				t.Errorf(`Unexpected error: got %d, expected %d`, err, test.expectedError)
+			}
+			if !reflect.DeepEqual(putParameterInputReceived, test.expectedOutput) {
+				t.Error(`Unexpected parameter`, putParameterInputReceived, test.expectedOutput)
+			}
+		})
+	}
+}
+

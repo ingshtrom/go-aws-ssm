@@ -32,20 +32,33 @@ type ParameterStore struct {
 //Will return /my-service/dev/param-a, /my-service/dev/param-b, etc... but will not return recursive paths
 //the `ssm:GetAllParametersByPath` permission is required
 //to the `arn:aws:ssm:aws-region:aws-account-id:/my-service/dev/*`
+//
+//This will also page through and return all elements in the hierarchy, non-recursively
 func (ps *ParameterStore) GetAllParametersByPath(path string, decrypt bool) (*Parameters, error) {
 	var input = &ssm.GetParametersByPathInput{}
 	input.SetWithDecryption(decrypt)
 	input.SetPath(path)
+  input.SetMaxResults(10)
 	return ps.getParameters(input)
 }
 
 func (ps *ParameterStore) getParameters(input *ssm.GetParametersByPathInput) (*Parameters, error) {
-	result, err := ps.ssm.GetParametersByPath(input)
-	if err != nil {
-		return nil, err
-	}
-	parameters := NewParameters(*input.Path, make(map[string]*Parameter, len(result.Parameters)))
-	for _, v := range result.Parameters {
+  allParams := make([]*ssm.Parameter, 0)
+  for {
+    result, err := ps.ssm.GetParametersByPath(input)
+    if err != nil {
+      return nil, err
+    }
+    allParams = append(allParams, result.Parameters...)
+
+    if result.NextToken != nil {
+      input.SetNextToken(*result.NextToken)
+    } else {
+      break
+    }
+  }
+	parameters := NewParameters(*input.Path, make(map[string]*Parameter, len(allParams)))
+	for _, v := range allParams {
 		if v.Name == nil {
 			continue
 		}
@@ -81,22 +94,37 @@ func (ps *ParameterStore) getParameter(input *ssm.GetParameterInput) (*Parameter
 	}, nil
 }
 
-func (ps *ParameterStore) PutSecureParameter(name string, kmsID string) error {
+func (ps *ParameterStore) PutSecureParameter(name, value string, overwrite bool) error {
+  return ps.putSecureParameterWrapper(name, value, "", overwrite)
+}
+func (ps *ParameterStore) PutSecureParameterWithCMK(name, value string, overwrite bool, kmsID string) error {
+  return ps.putSecureParameterWrapper(name, value, kmsID, overwrite)
+}
+func (ps *ParameterStore) putSecureParameterWrapper(name, value, kmsID string, overwrite bool) error {
 	if name == "" {
 		return ErrParameterInvalidName
 	}
 	input := &ssm.PutParameterInput{}
 	input.SetName(name)
 	input.SetType("SecureString")
+  input.SetValue(value)
 	if kmsID != "" {
 		input.SetKeyId(kmsID)
 	}
+  input.SetOverwrite(overwrite)
+
+  if err := input.Validate(); err != nil {
+    return err
+  }
 
 	return ps.putParameter(input)
 }
 func (ps *ParameterStore) putParameter(input *ssm.PutParameterInput) error {
 	_, err := ps.ssm.PutParameter(input)
 	if err != nil {
+    if awsError, ok := err.(awserr.Error); ok && awsError.Code() == ssm.ErrCodeParameterNotFound {
+			return ErrParameterNotFound
+		}
 		return err
 	}
 	return nil
