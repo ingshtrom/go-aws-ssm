@@ -1,7 +1,10 @@
-[![Build Status](https://travis-ci.com/PaddleHQ/go-aws-ssm.svg?branch=master)](https://travis-ci.com/PaddleHQ/go-aws-ssm)
-[![codecov](https://codecov.io/gh/PaddleHQ/go-aws-ssm/branch/master/graph/badge.svg)](https://codecov.io/gh/PaddleHQ/go-aws-ssm)
-[![Go Report Card](https://goreportcard.com/badge/github.com/PaddleHQ/go-aws-ssm)](https://goreportcard.com/report/github.com/PaddleHQ/go-aws-ssm)
-[![GoDoc](https://godoc.org/github.com/PaddleHQ/go-aws-ssm?status.svg)](https://godoc.org/github.com/PaddleHQ/go-aws-ssm)
+[![Build Status](https://travis-ci.com/ingshtrom/go-aws-ssm.svg?branch=master)](https://travis-ci.com/ingshtrom/go-aws-ssm)
+[![codecov](https://codecov.io/gh/ingshtrom/go-aws-ssm/branch/master/graph/badge.svg)](https://codecov.io/gh/ingshtrom/go-aws-ssm)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ingshtrom/go-aws-ssm)](https://goreportcard.com/report/github.com/ingshtrom/go-aws-ssm)
+[![GoDoc](https://godoc.org/github.com/ingshtrom/go-aws-ssm?status.svg)](https://godoc.org/github.com/ingshtrom/go-aws-ssm)
+
+# A fork of PaddleHQ/go-aws-ssm
+This will not be necessary once https://github.com/PaddleHQ/go-aws-ssm/pull/27 merges
 
 # go-aws-ssm
 Go package that interfaces with [AWS System Manager](https://www.amazonaws.cn/en/systems-manager/).
@@ -15,7 +18,7 @@ using a path hierarchy. During application startup you can use this package to f
 ## Install
 
 ```bash
-go get github.com/PaddleHQ/go-aws-ssm
+go get github.com/ingshtrom/go-aws-ssm
 ```
 
 ## Examples 
